@@ -8,7 +8,7 @@ on:
         default: "15"
         required: true
       iso_only:
-        description: "Only verify the ISO download (skip the build)"
+        description: "Only convert and upload the ISO (skip the build)"
         type: boolean
         default: false
 
@@ -35,14 +35,33 @@ jobs:
           mkdir -p "$RUNNER_TEMP/wind-waker"
           cd "$RUNNER_TEMP/wind-waker"
           FILE_ID=$(echo "$WIND_WAKER_URL" | sed -E 's/.*id=([^&]+).*/\1/; s/.*\/d\/([^\/]+).*/\1/')
-          gdown "$FILE_ID" -O "WindWaker.iso"
-          ls -lh "WindWaker.iso"
-          file "WindWaker.iso"
-          SIZE=$(wc -c < "WindWaker.iso")
-          if [ "$SIZE" -lt 1000000000 ]; then
-            echo "::error::El archivo sigue pesando menos de 1 GB. Revisa que en Google Drive este puesto como 'Cualquier persona con el enlace'."
+          gdown "$FILE_ID" -O "WindWaker.rvz"
+          ls -lh "WindWaker.rvz"
+          SIZE=$(wc -c < "WindWaker.rvz")
+          if [ "$SIZE" -lt 500000000 ]; then
+            echo "::error::El archivo descargado pesa menos de 500 MB. Revisa el enlace secreto."
             exit 1
           fi
+
+      - name: Convert RVZ to ISO
+        run: |
+          set -euo pipefail
+          brew install --cask dolphin
+          cd "$RUNNER_TEMP/wind-waker"
+          DOLPHIN_TOOL=$(find /Applications/Dolphin.app -name "dolphin-tool" -print -quit)
+          "$DOLPHIN_TOOL" convert -i "WindWaker.rvz" -o "WindWaker.iso" -f iso
+          ls -lh "WindWaker.iso"
+          file "WindWaker.iso"
+
+      - name: Upload ISO
+        if: ${{ inputs.iso_only }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: WindWaker-ISO
+          path: ${{ runner.temp }}/wind-waker/WindWaker.iso
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
 
       - name: Install build tools
         if: ${{ !inputs.iso_only }}
@@ -157,4 +176,5 @@ jobs:
           path: ${{ runner.temp }}/BlueWake.ipa
           if-no-files-found: error
           retention-days: 1
+
 
