@@ -1,0 +1,196 @@
+```yaml
+name: Build BlueWake IPA
+
+on:
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "Stop the build after this many minutes (15 = test, 320 = real)"
+        default: "15"
+        required: true
+      iso_only:
+        description: "Only convert and upload the ISO (skip the build)"
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 360
+
+    steps:
+      - name: Show runner information
+        run: |
+          sw_vers
+          sysctl -n hw.ncpu
+          sysctl -n machdep.cpu.brand_string
+          sysctl -n hw.memsize
+          df -h /
+
+      - name: Download Wind Waker disc image
+        env:
+          WIND_WAKER_URL: ${{ secrets.WIND_WAKER_URL }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/wind-waker"
+          cd "$RUNNER_TEMP/wind-waker"
+          curl -L --fail --retry 3 --retry-all-errors \
+            -A "Mozilla/5.0" \
+            -o "test build.ciso" \
+            "$WIND_WAKER_URL"
+          ls -lh "test build.ciso"
+          file "test build.ciso"
+
+      - name: Download Wiimms ISO Tools
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/wind-waker"
+          curl -L --fail --retry 3 --retry-all-errors \
+            -o wit.tar.gz \
+            "https://wit.wiimm.de/download/wit-v3.05a-r8638-mac.tar.gz"
+          tar -xzf wit.tar.gz
+          WIT_DIR="$(find . -maxdepth 1 -type d -name 'wit-*' -print -quit)"
+          if [ -z "$WIT_DIR" ]; then
+            echo "::error::Wiimms ISO Tools directory was not found."
+            exit 1
+          fi
+          chmod +x "$WIT_DIR/bin/wit"
+          "$WIT_DIR/bin/wit" --version
+
+      - name: Convert to ISO
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/wind-waker"
+          WIT_DIR="$(find . -maxdepth 1 -type d -name 'wit-*' -print -quit)"
+          "$WIT_DIR/bin/wit" FILES "test build.ciso"
+          "$WIT_DIR/bin/wit" copy \
+            "test build.ciso" \
+            --iso \
+            -d WindWaker.iso
+          ls -lh WindWaker.iso
+          file WindWaker.iso
+
+      - name: Upload ISO
+        if: ${{ inputs.iso_only }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: WindWaker-ISO
+          path: ${{ runner.temp }}/wind-waker/WindWaker.iso
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+      - name: Install build tools
+        if: ${{ !inputs.iso_only }}
+        run: brew install cmake ninja || true
+
+      - name: Restore build cache
+        if: ${{ !inputs.iso_only }}
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/bluewake
+          key: bw-build-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            bw-build-
+
+      - name: Cache status
+        if: ${{ !inputs.iso_only }}
+        run: |
+          echo "Exact hit: ${{ steps.cache.outputs.cache-hit }}"
+          echo "Matched key: '${{ steps.cache.outputs.cache-matched-key }}'"
+          if [ -d "$RUNNER_TEMP/bluewake" ]; then
+            du -sh "$RUNNER_TEMP/bluewake"
+          else
+            echo "No restored folder (fresh start)"
+          fi
+
+      - name: Clone BlueWake
+        if: ${{ !inputs.iso_only && steps.cache.outputs.cache-matched-key == '' }}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 \
+            https://github.com/chrissotraidis/bluewake.git \
+            "$RUNNER_TEMP/bluewake"
+
+      - name: Show BlueWake commit
+        if: ${{ !inputs.iso_only }}
+        run: |
+          cd "$RUNNER_TEMP/bluewake"
+          git log -1 --format='%H %s'
+
+      - name: Build IPA (with watchdog)
+        if: ${{ !inputs.iso_only }}
+        id: build
+        env:
+          LIMIT_MIN: ${{ inputs.minutes }}
+        run: |
+          set -u
+          set -m
+
+          cd "$RUNNER_TEMP/bluewake"
+          chmod +x scripts/builder/build.sh
+
+          FLAGS=(--ipa "$RUNNER_TEMP/BlueWake.ipa" --no-train)
+          if grep -q -- '--jobs' scripts/builder/build.sh; then
+            FLAGS+=(--jobs 3)
+          fi
+          if grep -q -- '--no-mods' scripts/builder/build.sh; then
+            FLAGS+=(--no-mods)
+          fi
+          echo "Flags: ${FLAGS[*]}"
+
+          LIMIT=$(( LIMIT_MIN * 60 ))
+          echo "Watchdog limit: ${LIMIT_MIN} minutes"
+
+          ./scripts/builder/build.sh \
+            "$RUNNER_TEMP/wind-waker/WindWaker.iso" \
+            "${FLAGS[@]}" &
+          BUILD_PID=$!
+
+          (
+            sleep "$LIMIT"
+            echo "::warning::Time limit reached, stopping build to save cache"
+            kill -TERM -- -"$BUILD_PID" 2>/dev/null
+            sleep 20
+            kill -KILL -- -"$BUILD_PID" 2>/dev/null
+            pkill -KILL -x xcodebuild clang clang++ ninja make 2>/dev/null
+          ) &
+          WATCHDOG_PID=$!
+
+          wait "$BUILD_PID"
+          RC=$?
+          kill "$WATCHDOG_PID" 2>/dev/null
+
+          if [ "$RC" -eq 0 ]; then
+            echo "Build finished successfully"
+            echo "done=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Build stopped or failed (exit $RC). Cache will be saved; run again to resume."
+            echo "done=false" >> "$GITHUB_OUTPUT"
+          fi
+          exit 0
+
+      - name: Save build cache
+        if: ${{ always() && !inputs.iso_only }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/bluewake
+          key: bw-build-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Check IPA
+        if: steps.build.outputs.done == 'true'
+        run: |
+          ls -lh "$RUNNER_TEMP/BlueWake.ipa"
+          file "$RUNNER_TEMP/BlueWake.ipa"
+          df -h /
+
+      - name: Upload IPA
+        if: steps.build.outputs.done == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: BlueWake-iOS
+          path: ${{ runner.temp }}/BlueWake.ipa
+          if-no-files-found: error
+          retention-days: 1
+```
