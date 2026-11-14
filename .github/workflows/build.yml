@@ -31,7 +31,7 @@ jobs:
           WIND_WAKER_URL: ${{ secrets.WIND_WAKER_URL }}
         run: |
           set -euo pipefail
-          pip3 install gdown
+          pip3 install --break-system-packages gdown
           mkdir -p "$RUNNER_TEMP/wind-waker"
           cd "$RUNNER_TEMP/wind-waker"
           FILE_ID=$(echo "$WIND_WAKER_URL" | sed -E 's/.*id=([^&]+).*/\1/; s/.*\/d\/([^\/]+).*/\1/')
