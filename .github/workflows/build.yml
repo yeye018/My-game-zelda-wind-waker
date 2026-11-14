@@ -31,17 +31,16 @@ jobs:
           WIND_WAKER_URL: ${{ secrets.WIND_WAKER_URL }}
         run: |
           set -euo pipefail
+          pip3 install gdown
           mkdir -p "$RUNNER_TEMP/wind-waker"
           cd "$RUNNER_TEMP/wind-waker"
-          curl -L --fail --retry 3 --retry-all-errors \
-            -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)" \
-            -o "WindWaker.iso" \
-            "$WIND_WAKER_URL"
+          FILE_ID=$(echo "$WIND_WAKER_URL" | sed -E 's/.*id=([^&]+).*/\1/; s/.*\/d\/([^\/]+).*/\1/')
+          gdown --id "$FILE_ID" -O "WindWaker.iso"
           ls -lh "WindWaker.iso"
           file "WindWaker.iso"
           SIZE=$(wc -c < "WindWaker.iso")
           if [ "$SIZE" -lt 1000000000 ]; then
-            echo "::error::El archivo descargado pesa menos de 1 GB. Google Drive devolvio una pagina web en lugar del juego. Revisa el enlace secreto WIND_WAKER_URL."
+            echo "::error::El archivo sigue pesando menos de 1 GB. Revisa que en Google Drive este puesto como 'Cualquier persona con el enlace'."
             exit 1
           fi
 
@@ -158,4 +157,3 @@ jobs:
           path: ${{ runner.temp }}/BlueWake.ipa
           if-no-files-found: error
           retention-days: 1
-
