@@ -35,7 +35,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/wind-waker"
           cd "$RUNNER_TEMP/wind-waker"
           FILE_ID=$(echo "$WIND_WAKER_URL" | sed -E 's/.*id=([^&]+).*/\1/; s/.*\/d\/([^\/]+).*/\1/')
-          gdown --id "$FILE_ID" -O "WindWaker.iso"
+          gdown "$FILE_ID" -O "WindWaker.iso"
           ls -lh "WindWaker.iso"
           file "WindWaker.iso"
           SIZE=$(wc -c < "WindWaker.iso")
@@ -157,3 +157,4 @@ jobs:
           path: ${{ runner.temp }}/BlueWake.ipa
           if-no-files-found: error
           retention-days: 1
+
