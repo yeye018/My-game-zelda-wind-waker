@@ -55,27 +55,16 @@ jobs:
           fi
           ls -lh "WindWaker.rvz"
 
-          echo "2. Descargando nodtool para macOS..."
+          echo "2. Descargando nodtool oficial para Apple Silicon..."
           GH_DOMAIN="github.com"
-          NOD_PATH="AxioDL/nod/releases/latest/download/nodtool-macos-universal.zip"
-          curl -L --fail --retry 3 "https://${GH_DOMAIN}/${NOD_PATH}" -o nodtool.zip
-          unzip -o nodtool.zip
-
-          NOD_BIN=$(find . -maxdepth 3 -type f -name "nodtool*" ! -name "*.zip" | head -n 1)
-          if [ -z "$NOD_BIN" ]; then
-            echo "::error::No se encontro el ejecutable nodtool tras descomprimir."
-            exit 1
-          fi
-          chmod +x "$NOD_BIN"
+          NOD_URL="https://${GH_DOMAIN}/encounter/nod/releases/download/v2.0.0-alpha.12/nodtool-macos-arm64"
+          curl -fsSL --retry 3 "$NOD_URL" -o nodtool
+          chmod +x nodtool
 
           echo "3. Convirtiendo RVZ a ISO descomprimido..."
-          if "$NOD_BIN" convert --help >/dev/null 2>&1; then
-            "$NOD_BIN" convert "WindWaker.rvz" "WindWaker.iso"
-          else
-            "$NOD_BIN" extract "WindWaker.rvz" "WindWaker.iso"
-          fi
+          ./nodtool convert "WindWaker.rvz" "WindWaker.iso"
 
-          rm -f "WindWaker.rvz" nodtool.zip "$NOD_BIN"
+          rm -f "WindWaker.rvz" nodtool
           ls -lh "WindWaker.iso"
           file "WindWaker.iso"
 
