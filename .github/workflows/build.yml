@@ -26,56 +26,74 @@ jobs:
           sysctl -n hw.memsize
           df -h /
 
-      - name: Download Wind Waker disc image
+      - name: Restore ISO cache
+        id: iso_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/wind-waker
+          key: ww-iso-v1
+
+      - name: Download and convert Wind Waker RVZ to ISO
+        if: steps.iso_cache.outputs.cache-hit != 'true'
         env:
           WIND_WAKER_URL: ${{ secrets.WIND_WAKER_URL }}
         run: |
           set -euo pipefail
-          START_DL=$(date +%s)
-          pip3 install --break-system-packages --quiet gdown
+          START_ALL=$(date +%s)
           mkdir -p "$RUNNER_TEMP/wind-waker"
           cd "$RUNNER_TEMP/wind-waker"
+
+          echo "1. Instalando gdown y descargando RVZ desde Google Drive..."
+          pip3 install --break-system-packages --quiet gdown
           FILE_ID=$(echo "$WIND_WAKER_URL" | sed -E 's/.*id=([^&]+).*/\1/; s/.*\/d\/([^\/]+).*/\1/')
           gdown "$FILE_ID" -O "WindWaker.rvz"
-          ls -lh "WindWaker.rvz"
-          SIZE=$(wc -c < "WindWaker.rvz")
-          if [ "$SIZE" -lt 500000000 ]; then
-            echo "::error::El archivo descargado pesa menos de 500 MB. Revisa el secreto WIND_WAKER_URL."
+
+          RVZ_SIZE=$(wc -c < "WindWaker.rvz")
+          if [ "$RVZ_SIZE" -lt 500000000 ]; then
+            echo "::error::El archivo descargado pesa menos de 500 MB. Verifica el secreto WIND_WAKER_URL."
             exit 1
           fi
-          END_DL=$(date +%s)
-          echo "Descarga completada en $((END_DL - START_DL)) segundos."
+          ls -lh "WindWaker.rvz"
 
-      - name: Convert RVZ to ISO
-        run: |
-          set -euo pipefail
-          START_CONV=$(date +%s)
-          cd "$RUNNER_TEMP/wind-waker"
-          DOMINIO="github.com"
-          RUTA_NOD="AxioDL/nod/releases/latest/download/nodtool-macos-universal.zip"
-          curl -L --fail --retry 3 "https://${DOMINIO}/${RUTA_NOD}" -o nodtool.zip
+          echo "2. Descargando nodtool para macOS..."
+          GH_DOMAIN="github.com"
+          NOD_PATH="AxioDL/nod/releases/latest/download/nodtool-macos-universal.zip"
+          curl -L --fail --retry 3 "https://${GH_DOMAIN}/${NOD_PATH}" -o nodtool.zip
           unzip -o nodtool.zip
-          NOD_BIN=$(find . -maxdepth 2 -type f -name "nodtool*" ! -name "*.zip" | head -n 1)
+
+          NOD_BIN=$(find . -maxdepth 3 -type f -name "nodtool*" ! -name "*.zip" | head -n 1)
           if [ -z "$NOD_BIN" ]; then
-            echo "::error::No se encontro el ejecutable nodtool dentro del zip."
+            echo "::error::No se encontro el ejecutable nodtool tras descomprimir."
             exit 1
           fi
           chmod +x "$NOD_BIN"
+
+          echo "3. Convirtiendo RVZ a ISO descomprimido..."
           if "$NOD_BIN" convert --help >/dev/null 2>&1; then
             "$NOD_BIN" convert "WindWaker.rvz" "WindWaker.iso"
           else
             "$NOD_BIN" extract "WindWaker.rvz" "WindWaker.iso"
           fi
-          rm -f "WindWaker.rvz" nodtool.zip
+
+          rm -f "WindWaker.rvz" nodtool.zip "$NOD_BIN"
           ls -lh "WindWaker.iso"
           file "WindWaker.iso"
+
           ISO_SIZE=$(wc -c < "WindWaker.iso")
           if [ "$ISO_SIZE" -lt 1300000000 ]; then
             echo "::error::La conversion fallo: WindWaker.iso pesa menos de 1.3 GB."
             exit 1
           fi
-          END_CONV=$(date +%s)
-          echo "Conversion a ISO completada en $((END_CONV - START_CONV)) segundos."
+
+          END_ALL=$(date +%s)
+          echo "Descarga y conversion completadas en $((END_ALL - START_ALL)) segundos."
+
+      - name: Save ISO cache
+        if: steps.iso_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/wind-waker
+          key: ww-iso-v1
 
       - name: Upload ISO
         if: ${{ inputs.iso_only }}
@@ -85,7 +103,9 @@ jobs:
           path: ${{ runner.temp }}/wind-waker/WindWaker.iso
           if-no-files-found: error
           compression-level: 0
-          retention-days: 1      - name: Install build tools
+          retention-days: 1
+
+      - name: Install build tools
         if: ${{ !inputs.iso_only }}
         run: brew install cmake ninja || true
 
@@ -114,16 +134,16 @@ jobs:
         if: ${{ !inputs.iso_only && steps.cache.outputs.cache-matched-key == '' }}
         run: |
           set -euo pipefail
-          DOMINIO="github.com"
-          REPO_BW="chrissotraidis/bluewake.git"
-          git clone --depth 1 "https://${DOMINIO}/${REPO_BW}" "$RUNNER_TEMP/bluewake"
+          GH_DOMAIN="github.com"
+          BW_REPO="chrissotraidis/bluewake.git"
+          git clone --depth 1 "https://${GH_DOMAIN}/${BW_REPO}" "$RUNNER_TEMP/bluewake"
 
       - name: Show BlueWake commit
         if: ${{ !inputs.iso_only }}
         run: |
           cd "$RUNNER_TEMP/bluewake"
           if [ ! -f "scripts/builder/build.sh" ]; then
-            echo "::error::No se encontro el script build.sh de BlueWake."
+            echo "::error::No se encontro scripts/builder/build.sh en el repositorio."
             exit 1
           fi
           git log -1 --format='%H %s'
@@ -136,6 +156,11 @@ jobs:
         run: |
           set -u
           set -m
+
+          if [ ! -f "$RUNNER_TEMP/wind-waker/WindWaker.iso" ]; then
+            echo "::error::No se encontro WindWaker.iso para compilar."
+            exit 1
+          fi
 
           cd "$RUNNER_TEMP/bluewake"
           chmod +x scripts/builder/build.sh
@@ -171,7 +196,7 @@ jobs:
           RC=$?
           kill "$WATCHDOG_PID" 2>/dev/null
 
-          if [ "$RC" -eq 0 ]; then
+          if [ "$RC" -eq 0 ] && [ -s "$RUNNER_TEMP/BlueWake.ipa" ]; then
             echo "Build finished successfully"
             echo "done=true" >> "$GITHUB_OUTPUT"
           else
